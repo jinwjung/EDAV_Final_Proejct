@@ -1,0 +1,745 @@
+---
+title: "Home Alone: Where should a single young male live in NYC?"
+author: "Jinwoo Jung (jj2762), Hyuk Joon Kwon (hk3084), Tae Yoon Lim (tl2968), Hojin Lee (hl3328)"
+date: "12/11/2019"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+---
+[github](https://github.com/hjlee9295/edav_final) | [R Pubs](http://rpubs.com/hjlee9295/edav_final)
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = TRUE)
+```
+
+## 1. Introduction
+
+As most of our teammates are new to New York City, we want to know more about the city. Also, as we are looking forward to having a job in the city, we were interested in finding a safe/good place to live in New York City by data analysis and visualization. The number one concern of living is safety. Living in the United States of America, we can easily hear the news of shootings, and some areas in New York state are infamous for it. Moreover, there are a lot of news on crime in the central Bronx or Brooklyn area. The next concern is the quality of food and buildings in the neighborhood. We want to know which neighborhood has many restaurants with A grade in the sanitary section and buildings with good quality such as no leakage, no bugs. Through the analysis, our group wants to know which neighborhood in New York City is a good place to live by considering the safety around the area, quality of restaurants, and the quality of buildings. 
+
+Please note that you need to download the dataset first in order to run the code below. The data must be in the same directory as the Rmd file.
+
+## 2. Data Source:
+We are going to use 3 sets of data from NYC open data, which are 'NYPD Complaint Data,' 'Housing Maintenance Code Violation,' and 'NYC Restaurant Inspection results.' We have exported those data sets as CSV files from the NYC open data webpage.
+
+### 2-1. Shooting Data
+This data file is collected from the NYC Open data site and the dataset was provided by the NYPD. Two datasets are used where the first one is named the NYPD Shooting Incident Data (Historic). This dataset has shooting data records from 2006 to 2018. The second dataset is NYPD Shooting Incident Data (Year to date). This is the data collected from the current year 2019. In total there are 21,542 observations of shooting between 2006 to 2019 years. The data provided includes the date and time of the shooting, the Borough of the shooting, information relating to the victim and the perpretators age, race and sex. There is also information about the coordinates of where the crime happened. A potential problem with the data is that zipcode information does not exist. But to compare this dataset to the other datasets, we had to collect zipcode data separatly in data cleaning process. 
+
+### 2-2. Restaurant Inspection
+The dataset reports inspection reports of restaurants in NYC, each of which is uniquely identified by their record ID number(CAMIS).  The inspection may occur to the same establishment more than once, for different violation records, or due to cyclic reporting. New establishments that have not yet received inspection are marked with date of 1/1/1900. Also, restaurants that have gone out of business are omitted. The most important feature of the dataset, the inspection grading systems works in a following way: The grading system is computed in two-step inspection process, providing an opportunity for restaurants who do not receive an “A” on their initial inspection to be re-inspected. 
+A score of fewer than 14 points on either initial or re-inspection results in an “A” grade. On re-inspection, a score of 14-27 points means a restaurant receives both a “B” grade and a “Grade Pending” card. On re-inspection, a score of 28 or more points means a restaurant receives both a “C” grade and a “Grade Pending” card. Certain uncorrected violations may generate additional compliance inspections, which are ungraded.
+For the NYC Restaurant Inspection dataset, there were some evident obstacles encountered. The first is that we could not use inspection grades for restaurants(i.e. grade of A,B,C) since about 49.5% accounts for NA values in the column. We thus  instead used values under SCORE column which only has approximately 4.35% NA values.  The second obstacle arises due to scaling of the values under Score column. The recorded score values are negatively associated with the reported grades (i.e. higher(lower) score values would result in lower(higher) grade). Thus, to deal with the issue, we rescaled the values such that higher(lower) score values would be positively associated with higher(lower) grades). 
+
+### 2-3. Building Inspection Data
+The 'Housing Maintenance Code Violation' (housing data) is issued by the Department of Housing Preservation and Development. The HPD issues violations, by the New York City Housing Maintenance Code or New York State Multiple Dwelling Law, against in conditions, in rental dwelling units and buildings. The housing data consists of all violations issued since October 1, 2012. 
+
+The housing data has 5,694,167 rows and 40 columns. The columns we are most interested in is the Class, Postcode, and Violation Status. We want to know which neighborhood has the best quality of building, and if a building has many violations with high class, we can assume that such a building will not be safe to live. Moreover, if the numbers of such buildings are many in the neighborhood, we can assume that such an area is not desirable to live in. The Class column is composed of characters: A, B, C, or I. Class A, B, C indicate the seriousness of the violation where A is the least serious and C is the most serious. The Class I violations are informational notices that do not have certification periods associated. The Postcode column is composed of doubles with zipcodes of the property. The Violation Status is a column with characters that describes the violation status of the building. The housing data includes a violation when it is first open and the same violation with different statuses. Later, we will only use the open.
+
+One problem of the data is that there can be multiple rows for one building under the same violation. However, each row has a different violation status on it (open, close, False Cert, etc.), we can remove the duplicates by filtering the status. The housing data has some missing values - not too many to hurt the analysis - but, since the data has a lot of rows, we believe dropping such rows will not affect the analysis much. 
+
+
+```{r}
+#Library
+library(tidyverse)
+library(stringr)
+library(readr)
+library(forcats)
+library(choroplethr)
+library(choroplethrZip)
+library(gridExtra)
+library(tidyr)
+library(ggmosaic)
+library(grid)
+library(dplyr)
+library(maps)
+library(ggplot2)
+library(viridis)
+library(data.table)
+library(forwards)
+library(forcats)
+library(parcoords)
+library(GGally)
+library(extracat)
+library(scales)
+library(viridis)
+```
+
+## 3. Analysis of Shooting Data
+
+### 3-1. Data Transformation:
+
+Initially the two datasets were imported and combined into a single data frame. The single dataframe now consisted of shooting data provided by the NYPD over the years 2006 to 2019. As we are evaluating on neighborhoods it is necessary to find out what neighborhood each event corresponds to. Unfortunately, unlike the other two datasets the zip code was not provided and the only information given was the longitude and latitude data. Using python packages we were able to retrieve the zip code information using longitude and latitude data. After the zip codes were added in a new column 'Zip' the file was exported as NYPD_ZIP.csv. The below is the python code we used.
+
+```{p}
+import pandas as pd
+import datetime
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
+import warnings
+import time
+
+#Combining two dataframes into one and exporting
+df1 = pd.read_csv("NYPD_Shooting_Incident_Data__Historic_.csv")
+df2 = pd.read_csv("NYPD_Shooting_Incident_Data__Year_To_Date_.csv")
+df = pd.concat([df1,df2],axis=0,sort = True)
+df.to_csv(r'C:\Users\bluec\NYPD_Shooting.csv')
+
+#Adding zip code column. 
+crime_data = pd.read_csv("NYPD_Shooting.csv")
+
+geolocator = Nominatim()
+geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+def Lat_Lon_converter_2(Lat,Lon):
+    try:
+        Lat_Lon = str(Lat) + ", " + str(Lon)
+        location = geocode(Lat_Lon)
+        zip_code = location.address.split(', ')[-2:-1][0]
+        int_zip_code = int(zip_code[0:5])
+    except:
+        return 0
+    return int_zip_code
+
+warnings.filterwarnings('ignore')
+for k in range(0,21):
+    print(datetime.datetime.now())
+    start = time.time()
+    crime_data.loc[j:j+1,"Zip"] = crime_data.loc[j:j+1].apply(lambda x: Lat_Lon_converter_2(x['Latitude'],x['Longitude']),axis=1)
+    print("Process time: " + str(time.time() - start))
+    j += 1000
+    print(j)
+    crime_data.to_csv(r'C:\Users\bluec\NYPD_ZIP.csv')
+    time.sleep(300)
+```
+
+### 3-2. Missing Data
+
+We evaluated missing data after importing zip code using the python code above. Initially, we replaced blank spaces to NA values, and analyzed data set for missing values with visna package. The column that had the most missing values was the LOCATION_DESC column. This column gave us information about the setting of the crime such as private household, apartment or Bar. It was interesting to note that the victims information was always recorded but often the perpetrators information was not.
+However, we observed that most of the data is not missing, and there were not any prevalent patterns with missing values. As a result, we removed rows with missing values from the data set, and you can find the analaysis at the below.
+
+```{r, fig.width=10,fig.height=8}
+df_shoot <- read.csv("NYPD_ZIP.csv", na.strings=c("","NA"))
+visna(df_shoot, sort = "b")
+```
+
+### 3-3. Results/Analysis
+
+We tried to analyze the data from multiple perspective, and first we looked into date and time of the shooting. In order to analyze the date and time of shooting, we transformed the data into POSIXct form using both date and time columns. We investigated yearly data by using lubridate pakcage from the tidyr. There seems to be a decrease in the number of shootings as the years go by, which is a very positive finding in terms of general safety in NYC. Also, we separated bar graph by borough, which allowed us to compare shooting intances among different boroughs. We observed that the relative amount of shooting per borough seems to be similar throughout years.
+
+```{r}
+df_shoot$OCCUR_DATE <- as.character(df_shoot$OCCUR_DATE)
+df_shoot$OCCUR_TIME <- as.character(df_shoot$OCCUR_TIME)
+df_shoot$OCCUR <- paste(df_shoot$OCCUR_DATE, df_shoot$OCCUR_TIME, sep=" ")
+df_shoot$OCCUR <- as.POSIXct(df_shoot$OCCUR, format = "%m/%d/%Y %H:%M:%S")
+df_shoot$year = lubridate::year(df_shoot$OCCUR)
+df_shoot <- df_shoot%>%filter(!is.na(year) & !is.na(BORO))
+ggplot(df_shoot)+
+  geom_bar(aes(x=year,fill=BORO)) + labs(title = "Stacked by Borough", fill = "Borough") + theme_grey(16)+scale_fill_viridis(discrete = TRUE)
+```
+
+The next analysis was a comparison on time: determining which hours have relatively higher shooting instances than others. It seems that there were fewer shootings from 5:00 AM to 6:00 PM compared to other times. As our objective was to decide on a good place to live, we created a line graph that showed the number of shootings by each Borough. Our investigation shows that Brooklyn has the most number of shootings. Also, we noted that the ratio of shootings per hour is consistent from 5:00 AM to 6:00 PM with relatively less shooting instances. From the line plot below, we can also observe that the pattern of shooting is fairly consistent. Lastly, we observed that Bronx and Brooklyn have a more extreme differences while Staten Island seems to be more consistent throughtout the day. 
+
+```{r, fig.width=16,fig.height=5}
+df_shoot$hour = lubridate::hour(df_shoot$OCCUR)
+df_shoot <- df_shoot %>% filter(!is.na(hour) & !is.na(BORO))
+c <- ggplot(df_shoot)+
+  geom_bar(aes(x=hour)) + labs(title = "Shooting data by hour") +theme_grey(16)
+d <- ggplot(data=df_shoot, aes(x=hour, group=BORO)) + geom_line(aes(fill=..count.., color = BORO), stat="bin", binwidth=1) +
+        geom_point(aes(color=BORO), stat="bin", binwidth=1) + labs(title = "Hourly shooting data by Borough", color = "Borough")+theme_grey(16)
+grid.arrange(c,d, ncol=2)
+```
+
+Victims and perpetrators data also gives us an insight. While exploring the data, we noticed some values do not make sense, such as 940 for an age. Since there are only or two values recorded like this, we removed those rows of data. Data suggests that men are much more likely to be victims of shooting than women. The age groups suggest that people in the age group 18-24 and 25-44 have the greatest chance of being shot of all age groups. It is surprising to note that people under the age of 18 have a higher chance of falling victim than people above the age of 45. From the perpetrators dataset, men are more likely to be perpetrators. Also, the gender gap in this case was more extreme than that of victims. The other analysis showed similar results, where people of the age 18-24 and 25 - 44 are most likely to be perpetrators. We thought that the similar patterns shown for two different data set could be attributed to the fact that the people of the same age groups shoot one another. For instance, people aged 18-24 mostly shoot people age 18-24. To test if this hypothesis is true, the third mosaic plot is plotted between the ages of the victims and perpetrators. The graph shows that out hypothesis is not true, and the perpetrators shoot people of all age groups, not just of their own. 
+
+```{r, fig.width=10,fig.height=5}
+df_shoot = subset(df_shoot, PERP_AGE_GROUP != '940' & PERP_AGE_GROUP != '1020' & VIC_AGE_GROUP != 'UNKNOWN' & VIC_SEX != 'U')
+df_shoot <- df_shoot %>% droplevels(df_shoot$VIC_AGE_GROUP)
+ggplot(data = df_shoot) + geom_mosaic(aes(x = product(VIC_SEX), fill =VIC_AGE_GROUP)) + labs(x='Victim sex', y="Victim age group", title="Victim: Age ~ Sex", fill = "Victim Age Group") +theme_grey(16)+scale_fill_viridis(discrete = TRUE)
+```
+
+```{r, fig.width=10,fig.height=5}
+df_shoot <- subset(df_shoot, PERP_AGE_GROUP != '940' & PERP_AGE_GROUP != '1020' & PERP_AGE_GROUP != 'UNKNOWN' & PERP_SEX != 'U')
+df_shoot <- df_shoot %>% droplevels(df_shoot$PERP_AGE_GROUP)
+ggplot(data = df_shoot) + geom_mosaic(aes(x = product(PERP_SEX), fill =PERP_AGE_GROUP)) + labs(x='Perpretator sex', y="Perpretator age group", title="Perpretator Age ~ Sex",fill = "Perpetrator Age Group")+theme_grey(16)+scale_fill_viridis(discrete = TRUE)
+```
+```{r, fig.width=10,fig.height=5}
+ggplot(data = df_shoot) + geom_mosaic(aes(x = product(VIC_AGE_GROUP), fill =PERP_AGE_GROUP)) + labs(x='Victim age group', y="Perpetrator age group", title="Victim Age ~ Perpritator age", fill = "Perpetrator Age Group")+theme_grey(16)+scale_fill_viridis(discrete = TRUE)
+```
+
+STATISTICAL MURDER FLAG column tells us whether the shooting lead to a murder or not. Interestingly, around 80 percent of the times shootings do not lead to a murder. Most of the times, it is often thought that shootings lead to a murder, but the data showed elsewise. 
+
+```{r, fig.width=10,fig.height=5}
+ggplot(df_shoot, aes(x=factor(STATISTICAL_MURDER_FLAG)))+
+  geom_bar(aes(y = (..count..)/sum(..count..))) +
+  labs(x='Lead to murder', y="Percentage", title="How frequntly does shooting lead to murder") +
+  scale_x_discrete(labels=c("No","Yes")) +theme_grey(16)
+```
+
+In our initial missing data evaluation of the data, LOCATION_DESC had the most amount of missing data. If we remove the missing data and evaluate the locations of where the shootings happen, Multidwell Public Houses and Apartment buildings are the places where the shootings happen most frequently. However, as there is a lot of missing data we must acknowledge different possibilities as well. 
+
+```{r}
+df_shoot  %>%filter(!is.na(LOCATION_DESC))%>% 
+  group_by(LOCATION_DESC) %>%                              
+  summarize(counts = n()) %>%
+  arrange(-counts) %>%                                
+  mutate(LOCATION_DESC = factor(LOCATION_DESC , LOCATION_DESC )) %>%   
+  ggplot(aes(x=LOCATION_DESC , y=counts)) +                  
+    geom_bar(stat="identity") +
+    theme(axis.text.x=element_text(angle=90, hjust=1)) + 
+    labs(y='Frequency', title="Where does the shooting happen?")
+```
+
+We extracted the zip code of each shooting using X_COORD_CD and Y_COORD_CD columns. With the zip codes, we will identify the neighborhoods of each zip code. We made a lookup CSV file to match the zip code to its respective neighborhood. Since the other two datasets already have the zip code value it would be possible to identify the number of shootings per neighborhood. Using the Cleveland dot plot, it is possible to show neighborhoods in order of shooting frequency. Our observations show that central Brooklin had the most amount of gunshots by a big difference. 
+
+
+```{r}
+zip <- read.csv("Neighbor_by_zipcode.csv")
+df_shoot$neighborhood <- zip$Neighborhood[match(unlist(df_shoot$Zip), zip$ZipCode)]
+
+```
+
+```{r, fig.width=10,fig.height=10}
+mean_score <- df_shoot %>% filter(!is.na(neighborhood)) %>% group_by(neighborhood)%>% tally()
+
+ggplot(mean_score, aes(n, reorder(neighborhood, n),)) +
+geom_point(color = 'blue') +
+ggtitle("Average grade of each neighborhood") + 
+    labs(x='Number of Shootings', y="Neighborhood", title="Number of shootings per Neighborhood") +theme_grey(16)
+```
+
+The choropleth drawn from the zip codes show clusters of areas where shootings are most frequent. There seems to be three main clusters. One between upper Manhattan and the Bronx, one in Brooklyn and one in Queens. 
+
+```{r fig.height=5, fig.width=10}
+
+#Getting the count of violation on each zip code
+mean_score_zipcode <- df_shoot %>% group_by(Zip) %>% tally()
+#Creating value & region column for the choropleth (need value as numeric region as character)
+mean_score_zipcode$region <- as.character(mean_score_zipcode$Zip)
+mean_score_zipcode$value <- mean_score_zipcode$n
+
+#code vector for the choropleth
+nyc_fips = c(36005, 36047, 36061, 36081, 36085)
+#choropleth map
+zip_choropleth(mean_score_zipcode,
+               county_zoom = nyc_fips,
+               title       = "Shooting density from 2006 - 2019",
+               legend      = "Number of shootings",
+               num_colors = 7)
+```
+
+To combine the results after summing up the frequency of shooting by neighborhood we scaled the numbers to 0 to 100 using the min max scaling method. 
+
+```{r}
+year_neighborhood <- df_shoot %>% filter(!is.na(neighborhood)) %>% group_by(neighborhood,year) %>% tally()
+```
+
+```{r}
+range01 <- function(x){(-x-min(-x))/(max(-x)-min(-x))}
+scores <- df_shoot %>% filter(!is.na(neighborhood)) %>% group_by(neighborhood) %>% tally() 
+scores$scaled <- range01(scores$n) * 100
+```
+
+
+## 4. Dataset: New York City Restaurant Inspection Dataset
+
+```{r}
+df_rest<- readr::read_csv("DOHMH_New_York_City_Restaurant_Inspection_Results.csv")
+```
+
+### 4-1. Data Cleaning & initial analysis:
+
+The dataset has 396,218 row values with 26 column values. Some of the noticeable columns are CAMIS(unique id for restaurant), DBA(name of restaurant), zipcode, score, grade, grade date (date when the grade was issued to a restaurant), inspection type (a combination of the inspection program and the type of inspection performed). Since we would ultimately join this dataset to others by neighborhoods, the most important features/variables from this dataset would be variables that can be measured to denote safe/clean restaurants. Accordingly, there are two measurable evaluations available to denote a restaurant’s inspection results: Score and Grade. We chose to measure restaurant’s inspection results using SCORE column instead of GRADE column for the following reason: Not only numerical values enable us to differentiate inspection results from different restaurants numerically which would later merge with other datasets, there are 196046 counts of missing values from the GRADE column, which accounts to nearly 49.5%, while there are 17237 counts of missing values from the SCORE column (approximately 4.35%).
+
+```{r}
+# initial inspection of data
+dim(df_rest) # initial dimension of dataset
+colSums(is.na(subset(df_rest, select = c("SCORE","GRADE")))) # counts of missing values
+colSums(is.na(subset(df_rest, select = c("SCORE","GRADE")))) / dim(df_rest)[1]*100 # prop of missing values
+```
+
+Also, we only chose to look at initial inspection results from the restaurants because restaurants that did not receive the grade A in initial inspection would go through multiple re-inspections, which would likely to increase the restaurants’ inspection results. Moreover, re-inspections would increase record count of grades for restaurants, which would overestimate average inspection results when we later group the data by neighborhood or zip code. While the initial inspection data does not perfectly reflect restaurants' grade, we believe having more variation in scores from initial inspection would be a better indicator to differentiate among restaurants than to work with final, readjusted scores that have much less different scores among restaurants. This is clearly shown on a below graph where restaurants' grades from final inspections are plotted. It shows that most of the restaurants received grade A and only a few have received B or C.
+
+
+
+```{r}
+# Restauraunt's final inspection data
+# slight modification was made to code was provided by the given dataset description document
+Inspections <- df_rest %>%
+    filter((`INSPECTION TYPE` %in% 
+            c('Cycle Inspection / Re-inspection'
+              ,'Pre-permit (Operational) / Re-inspection')
+          |(`INSPECTION TYPE` %in%
+              c('Cycle Inspection / Initial Inspection'
+                ,'Pre-permit (Operational) / Initial Inspection')) 
+          & SCORE <= 13)
+         | (`INSPECTION TYPE` %in%  
+              c('Pre-permit (Operational) / Reopening Inspection'
+                ,'Cycle Inspection / Reopening Inspection'))
+         & GRADE %in% c('A', 'B', 'C', 'P', 'Z')) %>%
+  select(CAMIS,`INSPECTION DATE`)
+
+#Select distinct inspections
+Inspections_Distinct <- distinct(Inspections)
+
+#Select most recent inspection date
+MostRecentInsp <- Inspections_Distinct %>% group_by(CAMIS) %>%  
+  slice(which.max(as.Date(`INSPECTION DATE`,'%m/%d/%Y')))
+
+#Join most recent inspection with original dataset
+inner_join_df <- inner_join(df_rest,MostRecentInsp, by = "CAMIS","INSPECTION DATE");
+
+#Select restaurant inspection data based on most recent inspection date
+Final <- df_rest %>% inner_join(MostRecentInsp) %>%
+    filter((`INSPECTION TYPE` %in% 
+            c('Cycle Inspection / Re-inspection'
+              ,'Pre-permit (Operational) / Re-inspection'
+              , 'Pre-permit (Operational) / Reopening Inspection' 
+              ,'Cycle Inspection / Reopening Inspection') |
+              (`INSPECTION TYPE` %in%
+              c('Cycle Inspection / Initial Inspection'
+                ,'Pre-permit (Operational) / Initial Inspection')) & SCORE <= 13)) %>%
+  select(CAMIS,DBA,`INSPECTION DATE`,GRADE,`INSPECTION TYPE`,SCORE)
+
+#Select distinct restaurant inspection data
+Final <- distinct(Final)
+
+Final<- filter(Final, GRADE=="A" | GRADE =="B"| GRADE =="C")
+
+ggplot(Final, aes(GRADE)) + 
+  geom_bar(color = "black", fill = "lightblue") + 
+  labs(title="Fiinal inspection grades of restaurants in NYC") +
+  xlab("Grades")+theme_grey(16)
+```
+
+Thus, the initial data cleaning part was involved in first selecting the inspection type as initial inspections. Then we removed rows with missing values from the score column. Because we would ultimately zip code to map it to a neighborhood to combined with other datasets, we also removed the missing values from the zip code column. This allowed the dataset to contain no missing values. 
+
+### 4-2. Missing Data
+
+```{r}
+#Data Cleaning part: 
+df_rest_2 <- df_rest
+colnames(df_rest_2)[18] = "INSPECTION_TYPE"
+df_rest_2 <- filter(df_rest_2, INSPECTION_TYPE == "Cycle Inspection / Initial Inspection" | 
+                INSPECTION_TYPE == "Pre-permit (Operational) / Initial Inspection")
+
+colSums(is.na(subset(df_rest_2, select = c("SCORE","GRADE")))) # counts of missing values
+colSums(is.na(subset(df_rest_2, select = c("SCORE","GRADE"))))/ dim(df_rest_2)[1]*100 # prop of missing values
+
+columns_intersted = c("CAMIS","ZIPCODE", "BORO", "INSPECTION DATE", "INSPECTION_TYPE", "SCORE")
+df_rest_2<- subset(df_rest_2, select = columns_intersted) # Restaurant Data Frame
+df_rest_2$`INSPECTION DATE` <- as.Date(df_rest_2$`INSPECTION DATE`,format = "%m/%d/%Y") # convert to Date class
+colnames(df_rest_2)[4] <- "INSPECTION_DATE" # make column name without space
+
+df_rest_2<-subset(df_rest_2, !is.na(SCORE)) # Remove NA values from SCORE column
+#dim(df_rest)
+
+colSums(is.na(df_rest_2)) # to check whether there still exists NA values
+df_rest_2<-subset(df_rest_2, !is.na(ZIPCODE)) # Remove NA values from ZIPCODE column
+
+                                  
+colSums(is.na(df_rest_2)) # to check whether there still exists NA values
+
+#Add neighborhood based on zipcode
+zip <- read.csv("Neighbor_by_zipcode.csv")
+df_rest_2$neighborhood <- zip$Neighborhood[match(unlist(df_rest_2$ZIPCODE), zip$ZipCode)]
+
+# Remove NA values from column neighborhood because some building 
+# has a particular zipcode that is not mapped to zipcode
+df_rest_2<- filter(df_rest_2, !is.na(neighborhood)) 
+```
+
+Restaurants’ scoring system is set such that a lower score represents the higher grade. To make it more interpretable, we re-scaled the scores such that higher scores would lead to higher grades. We used min-max scalarization and multiplied it by 100 so that scores are in a range from 0 to 100. Also, we made variables in rescaling to be negative to make the updated scale to correctly output higher scores to higher grades. As a result, scores higher than approximately 90.9 are assigned to have grade A, and scores in between approximately 83.03 and 90.9 are assigned to have grade B, and scores below approximately 83.03 are assigned to have grade C [i.e. exact boundaries for A and B, B and C are (-14+164)/165, (-27+164)/165, i.e. -1 and 164 are minimum and maximum value of the pre-scaled score].
+
+```{r}
+#Rescaling SCORE values
+#Note: Initially lower scores were assigned to be higher grade, so wanted to change the score
+# such that higher score values would indicate higher grade values
+
+summary(df_rest_2$SCORE) # summary stats of SCORE colun
+
+rescaling_neg <- function(x){(-x-min(-x))/(max(-x)-min(-x))*100} #note: - sign used since 
+                                       # lower values mean lower result values
+df_rest_2$SCORE<- rescaling_neg(df_rest_2$SCORE)
+summary(df_rest_2$SCORE)
+
+```
+
+Two graphs shown below illustrate the distribution of the converted scores of the restaurants. The histogram shows that the overall distribution of the scores is not symmetric but rather left-skewed. This result makes sense for a following reason: Each operating restaurant in NYC, and in general, compete against others to maximize profit, and they would not want to receive negative signs that may impact their business negatively. Accordingly, restaurants would try their best to follow regulations and thus avoid violations, which would lead to receiving higher scores and grades from inspection. Assuming a majority of restaurants follow this idea, the skewed distribution toward high scores is thus a certainly reasonable result. The vertical lines and annotations are also added to show on which boundaries represent scores being which grades. Heatmap below also supports the idea that there are more counts recorded in the upper section of the graph, representing there are more counts of higher scores compared to lower scores. 
+ 
+The last graph shows a distribution of the initial inspection grades of restaurants in NYC. Since the distribution of scores of restaurants, as shown in the first graph is left-skewed, it is no surprise to see that the distribution of grades is more “centered” around the grade A rather than grade C (here, the distribution is right-skewed, which is opposite from the score graph because scores that are associated with grade A is higher than scores that are associated with grade B or C.  Also, as described in the dataset description section above, the grade distribution has more variation since only initial inspection results are taken into account. 
+
+### 4-3. Result/Anaysis
+
+
+```{r}
+# function that converts score to grade, according to score scale given above
+score_to_grade <- function(score){
+  if (score > (-14+164)/165*100) {
+    return("A") }
+  else if(score >= (-27+164)/165*100){
+    return("B") }
+  else {
+    return("C") }
+}
+df_rest_2$GRADE <- sapply(df_rest_2$SCORE, score_to_grade)
+
+ggplot(filter(df_rest_2, SCORE >=60), aes(SCORE)) + 
+  geom_histogram(color = "black", fill = "lightblue") +
+  geom_vline(xintercept = (-14+164)/165*100, color = "red") +
+  geom_vline(xintercept = (-27+164)/165*100, color = "red") +
+  annotate("text", x = (-14+164)/165*100+10, y = 25000,
+  label = " A", color = "red", hjust = 0)  +
+  annotate("text", x = (-14+164)/165*100-5, y = 25000,
+  label = " B", color = "red", hjust = 0) +
+  annotate("text", x = (-27+164)/165*100-15, y = 25000,
+  label = " C", color = "red", hjust = 0) +
+  ggtitle( "Initial inspection scores of restaurants in NYC\nwith scores higher than 60" ) +theme_grey(16)
+
+# heat map of distribution of scores
+ggplot(df_rest_2, aes(y=SCORE, x=INSPECTION_DATE)) +
+geom_hex(bins = 20) +
+  xlab("(Initial) Inspection Date")+
+  xlab("Score")+
+  ggtitle("Heatmap of Initial Inspection scores \nof restaurants in NYC") +theme_grey(16) +scale_fill_viridis()
+
+ggplot(df_rest_2, aes(GRADE)) + 
+  geom_bar(color = "black", fill = "lightblue") + 
+  labs(title="Initial inspection grades of restaurants in NYC") +
+  xlab("Grades") +theme_grey(16)
+```
+
+We tried to look at if distributions of grades from initial inspection would give any different, meaningful results when we group the dataset either by boroughs or neighborhoods. The first graph below delivers average scores of restaurants in each of the neighborhoods, which would ultimately use it combine with other datasets. However, as the graphs show below, the average scores across each neighborhood are all in boundaries between approximately 83% and 91%, which are associated with grade B. This is not a surprising result. Because scores of restaurants are highly skewed, most of the restaurants' scores would more likely to receive grade A or B than C. Accordingly, when the dataset is grouped into each neighborhood, averaged scores for each neighborhood would likely reside in interval associated with grade either A or B.  
+
+```{r, echo=TRUE, fig.height=10}
+theme_dotplot <- theme_bw(16) +
+theme(axis.text.y = element_text(size = rel(.75)),
+axis.ticks.y = element_blank(),
+axis.title.x = element_text(size = rel(.75)),
+panel.grid.major.x = element_blank(),
+panel.grid.major.y = element_line(size = 0.5),
+panel.grid.minor.x = element_blank())
+
+# Mean score by neighborhood
+mean_score_neighbor <- df_rest_2 %>%
+    group_by(neighborhood) %>%
+    summarize(Mean = mean(SCORE, na.rm=TRUE))
+
+mean_score_neighbor$GRADE <- sapply(mean_score_neighbor$Mean, score_to_grade)
+
+# Distribution of grades by neighborhood
+ggplot(mean_score_neighbor, aes(x = Mean, y = reorder(neighborhood, Mean))) +
+geom_point()  + 
+  facet_wrap(~GRADE, ncol=1, scales = "free") +
+  xlab("Mean Score")+
+  ylab("") +
+  labs(title="Initial inspection scores of\nrestaurants in NYC\nby neighborhood")+  
+  theme_dotplot+theme_grey(16)
+```
+
+The second graph shown below takes a similar approach to the above. We tried to see if there is any new pattern arising by taking average scores by each Zipcode. Similar to the reasoning given above, while there is one location of zipcode, 11697, which shows to have an average score that is associated with grade A, all the other zip codes have average score values of grade B. 
+
+```{r}
+# Mean score by ZIPCODE
+mean_score_ZIPCODE<- df_rest_2 %>%
+    group_by(ZIPCODE) %>%
+    summarize(Mean = mean(SCORE, na.rm=TRUE))
+
+mean_score_ZIPCODE$GRADE <- sapply(mean_score_ZIPCODE$Mean, score_to_grade)
+
+# frequency counts of grades
+ggplot(mean_score_ZIPCODE, aes(GRADE)) + 
+  geom_bar(color = "black", fill = "lightblue") + 
+  labs(title="Initial inspection grade counts by\nzipcode of restaurants in NYC") +
+  xlab("Grades")+theme_grey(16)
+```
+
+Another similar result produced when we look at distributions of average scores across each of the boroughs in NYC. While there is a subtle difference between each borough, overall distributions of scores across each borough in NYC are similar in that scores received by restaurants from the initial inspection are skewed to left. The last graph represents a different way to illustrate the phenomenon. While frequency counts of grades received by restaurants from initial inspections each differ by boroughs, the distribution of grades received are similar in that restaurants received in decreasing order of grades from A, B, and C, respectively.
+
+It comes to a question whether this dataset, which shows seemingly similar average scores when grouped into neighborhoods, be viable so that it can be combined with other datasets. While it is true that there are no big variations in averaged scores in between neighbors, this represents the restaurants throughout NYC overall have a satisfying score (which is associated with grade B) and there is no specific neighborhood which have particularly bad results.
+
+```{r, echo=TRUE, fig.height=10}
+#Distribution of the converted scores by Borough
+# Note: Removed NA values (i.e. BORO =="0) from BORO column
+mean_score_boro<- filter(df_rest_2, BORO!="0") %>%
+    group_by(BORO) %>%
+    summarize(Mean = mean(SCORE, na.rm=TRUE))
+mean_score_boro$GRADE <- sapply(mean_score_boro$Mean, score_to_grade)
+
+# Distribution of the converted scores, faceted by Borough, with scores larger than 60
+ggplot(filter(df_rest_2, BORO!="0" & SCORE >=60), aes(SCORE)) + 
+  geom_histogram(color = "black", fill = "lightblue") +
+  geom_vline(xintercept = (-14+164)/165*100, color = "red") +
+  geom_vline(xintercept = (-27+164)/165*100, color = "red") +
+    annotate("text", x = (-14+164)/165*100+10, y = 1000,
+  label = " A", color = "red", hjust = 0)  +
+  annotate("text", x = (-14+164)/165*100-5, y = 1000,
+  label = " B", color = "red", hjust = 0) +
+  annotate("text", x = (-27+164)/165*100-15, y = 1000,
+  label = " C", color = "red", hjust = 0) +
+  facet_grid(BORO~., scale = "free") + 
+  ggtitle("Distribution of Restaurant's converted score by\nBorough, with values larger than 60") +
+  xlab("Mean Score")+theme_grey(16)
+
+```
+```{r}
+# Since the data is right skewed when, when aggregating the data by borough,
+# its score will not likely to have variation
+df_count <- summarize(group_by(df_rest_2, BORO,GRADE), Freq = n())
+ggplot(df_count, aes(x=BORO, y= Freq, fill=GRADE)) + 
+  geom_bar(position="dodge", stat="identity") +
+  ggtitle("Initial Inspection grades of restaurants\nby Borough")+theme_grey(16)+scale_fill_viridis(discrete = TRUE)
+```
+
+
+## 5.  Analysis of Building Inspection Data
+
+```{r}
+#Data Import
+df_housing <- read_csv('Housing_Maintenance_Code_Violations.csv')
+zip <- read_csv("Neighbor_by_zipcode.csv")
+
+```
+
+
+### 5-1. Data Transformation & Missing values
+```{r}
+#Data Cleaning
+
+df_housing$ApprovedDate <- as.character(df_housing$ApprovedDate)
+df_housing$BuildingID <- as.character(df_housing$BuildingID)
+
+
+#Drop rows with NA value in Postcode
+df_housing <- df_housing[!is.na(df_housing$Postcode),]
+#Delete rows with wrong postcode (ex:4or 6digit postcode)
+df_housing <- df_housing[!(df_housing$Postcode < 10000 |df_housing$Postcode >99999),]
+
+#Give numerical score to violation by seriousness (removed I since it is informative warning)
+df_housing$Grade = 0
+df_housing[df_housing$Class == 'A',]$Grade <- 1 
+df_housing[df_housing$Class == 'B',]$Grade <- 2
+df_housing[df_housing$Class == 'C',]$Grade <- 3
+
+#Add neighborhood column by the Zipcode
+df_housing$neighborhood <- zip$Neighborhood[match(unlist(df_housing$Postcode), zip$ZipCode)]
+#Convert the Zipcode to neighborhood
+#Drop NA values in neighborhood (we are only looking for the neighbor hood provided by the NY state health department: https://www.health.ny.gov/statistics/cancer/registry/appendix/neighborhoods.htm)
+df_housing <- df_housing[!is.na(df_housing$neighborhood),]
+df_housing2 <- df_housing
+df_housing <- df_housing %>% filter(str_detect(ViolationStatus, "Open"))
+df_housing <- df_housing %>% select(-starts_with("NOV"), -starts_with("Original"), -starts_with("New"))
+colSums(is.na(df_housing))
+```
+
+Since the data is so large, we have deleted some of the columns that we are not going to use during the analysis. Every column that starts with NOV is a piece of information on notice of violation which is irrelevant with our analysis. The columns start with New or Original are data on dates, but we will use the ApprovedDate for the date in the later analysis. After dropping the irrelevant columns for the analysis, we have dropped the rows with missing values in Zipcode and rows with irregular Zipcode such as 4-digit or 6-digit zip codes. Moreover, we have added neighborhood columns to the data frame so that later wen can draw graph by the neighborhood not zipcode, then also drops rows with NA values in the neighborhood since we are only looking for the neighborhood provided by New York state health department. Lastly, we have changed the categorical variable of class to numerical variable by assigning a number to each class. There is an indicator of the seriousness of the violation by 4 classes: A, B, C and I where C is the most serious, A is the least serious, and I is the informational notice (not a violation). We have put A as 1, B as 2, C as 3 to convert them into numerical.
+Other than the transformation above, there are not many transformations to perform because the data does not have many missing values. 
+
+
+### 5-2. Result/Analysis:
+
+We have tried two methods to score the safety/wellness of buildings in the area: mean of the score and sum of scores of the neighborhood. Below is the Cleveland dot plot of mean of the scores.
+```{r fig.height=15, fig.width=20}
+#score group by neighborhood
+mean_score_neighborhood <- df_housing %>% group_by(neighborhood) %>% summarize(Mean = mean(Grade), na.rm = TRUE)
+#Cleveland Dot Plot of the building quality
+ggplot(mean_score_neighborhood, aes( Mean, reorder(neighborhood, Mean),)) +
+  geom_point(color = 'blue') + 
+  ggtitle("Average grade of each neighborhood") + theme_grey(25)
+```
+
+Even though the average method shows the graph with the appropriate scale, but some neighborhoods should have a lower rank. The average method will neglect the number of violations that the buildings in the neighborhood have, so we have thought it is inappropriate to use the average method. Since we want to observe the neighborhood with the minimum number of violations and least severeness in the degree of violation, we have added all the scores in the violation to start investigating the safety of buildings in the neighborhood. The below is a Cleveland dot plot with the sum of scores in each neighborhood.
+
+```{r fig.height=17, fig.width=20}
+#score group by neighborhood
+sum_score_neighborhood <- df_housing %>% group_by(neighborhood) %>% summarize(Sum = sum(Grade), na.rm = TRUE)
+#Cleveland Dot Plot of the building quality
+sum_score_neighborhood$Sum_ <- sum_score_neighborhood$Sum / 1000
+ggplot(sum_score_neighborhood, aes(Sum_, reorder(neighborhood, Sum_),)) +
+  geom_point(color = 'blue') + 
+  ggtitle("Sum of violation grade, x scales(sum) reads in thousands") +theme_grey(25)
+```
+
+For both graphs, it is better to have less score. From the graph, we can see that the north side of Manhattan is not safe/good in the quality of buildings whereas the lower manhattan and some of the queens' area has a great quality of building. Before the investigation, we have thought that queens, Bronx, and the Harlem area will have many counts on the violation of inspection since those areas are known to be quite dangerous. Moreover, Columbia university belongs to central Harlem and the rate of the location is not good. We all knew the area around Columbia is not safe as much as the upper east side, but the data shows that we should have to go back to home not too late.
+
+
+```{r fig.height=5, fig.width=10}
+#Getting the count of violation on each zip code
+mean_score_zipcode <- df_housing %>% group_by(Postcode) %>% summarize(Mean = sum(Grade), na.rm = TRUE)
+#Creating value & region column for the choropleth (need value as numeric region as character)
+mean_score_zipcode$region <- as.character(mean_score_zipcode$Postcode)
+mean_score_zipcode$value <- mean_score_zipcode$Mean
+
+#Make the scores by neighborhood
+choropleth_data <- zip
+choropleth_data$value <- sum_score_neighborhood$Sum[match(choropleth_data$Neighborhood, sum_score_neighborhood$neighborhood)]
+choropleth_data$region <- as.character(choropleth_data$ZipCode)
+
+#code vector for the choropleth
+nyc_fips = c(36005, 36047, 36061, 36081, 36085)
+#choropleth map
+zip_choropleth(choropleth_data,
+               county_zoom = nyc_fips,
+               title       = "Violation of maintainence code",
+               legend      = "Sum of violation",
+               num_colors = 9)
+```
+
+The choropleth graph clearly shows the area that has the highest number of violations in the building. Before the analysis, we have predicted that Bronx and central queens will be the places not desirable to live since they are both well-known Harlem areas. Moreover, the upper east side will the places most desirable to live. However, the choropleth shows that the Wall Street area is the place most desirable to live. One explanation might be that the buildings in the upper east side are mostly old, hence they are more likely to get violation notice then buildings in the Wall Street, which are built more recently then ones in the upper east side. One surprising point of the graph is that central queens have a very low level. We have previously suspected that the central queens' area will be the dangerous place to live but according to the graph, the buildings in the area do not violate much of the code.
+
+```{r fig.height=13, fig.width=20}
+
+df_2013 <- df_housing2 %>% filter(str_detect(ApprovedDate, "2013"))
+df_2014 <- df_housing2 %>% filter(str_detect(ApprovedDate, "2014"))
+df_2015 <- df_housing2 %>% filter(str_detect(ApprovedDate, "2015"))
+df_2016 <- df_housing2 %>% filter(str_detect(ApprovedDate, "2016"))
+df_2017 <- df_housing2 %>% filter(str_detect(ApprovedDate, "2017"))
+df_2018 <- df_housing2 %>% filter(str_detect(ApprovedDate, "2018"))
+df_2019 <- df_housing2 %>% filter(str_detect(ApprovedDate, "2019"))
+
+count_2019 <- df_2019 %>% group_by(neighborhood) %>% summarize(Count = sum(Grade), na.rm = TRUE)
+count_2018 <- df_2018 %>% group_by(neighborhood) %>% summarize(Count = sum(Grade), na.rm = TRUE)
+count_2017 <- df_2017 %>% group_by(neighborhood) %>% summarize(Count = sum(Grade), na.rm = TRUE)
+count_2016 <- df_2016 %>% group_by(neighborhood) %>% summarize(Count = sum(Grade), na.rm = TRUE)
+count_2015 <- df_2015 %>% group_by(neighborhood) %>% summarize(Count = sum(Grade), na.rm = TRUE)
+count_2014 <- df_2014 %>% group_by(neighborhood) %>% summarize(Count = sum(Grade), na.rm = TRUE)
+count_2013 <- df_2013 %>% group_by(neighborhood) %>% summarize(Count = sum(Grade), na.rm = TRUE)
+
+choropleth_2019 <- zip
+choropleth_2018 <- zip
+choropleth_2017 <- zip
+choropleth_2016 <- zip
+choropleth_2015 <- zip
+choropleth_2014 <- zip
+choropleth_2013 <- zip
+
+choropleth_2019$value <- count_2019$Count[match(choropleth_2019$Neighborhood, count_2019$neighborhood)]
+choropleth_2019$region <- as.character(choropleth_2019$ZipCode)
+
+choropleth_2018$value <- count_2018$Count[match(choropleth_2018$Neighborhood, count_2018$neighborhood)]
+choropleth_2018$region <- as.character(choropleth_2018$ZipCode)
+
+choropleth_2017$value <- count_2017$Count[match(choropleth_2017$Neighborhood, count_2017$neighborhood)]
+choropleth_2017$region <- as.character(choropleth_2017$ZipCode)
+
+choropleth_2016$value <- count_2016$Count[match(choropleth_2016$Neighborhood, count_2016$neighborhood)]
+choropleth_2016$region <- as.character(choropleth_2016$ZipCode)
+
+choropleth_2015$value <- count_2015$Count[match(choropleth_2015$Neighborhood, count_2015$neighborhood)]
+choropleth_2015$region <- as.character(choropleth_2015$ZipCode)
+
+choropleth_2014$value <- count_2014$Count[match(choropleth_2014$Neighborhood, count_2014$neighborhood)]
+choropleth_2014$region <- as.character(choropleth_2014$ZipCode)
+
+choropleth_2013$value <- count_2013$Count[match(choropleth_2013$Neighborhood, count_2013$neighborhood)]
+choropleth_2013$region <- as.character(choropleth_2013$ZipCode)
+
+g1 <- zip_choropleth(choropleth_2013,
+               county_zoom = nyc_fips,
+               title       = "2013",
+               legend      = "Sum of violation",
+               num_colors = 9)
+g2 <- zip_choropleth(choropleth_2014,
+               county_zoom = nyc_fips,
+               title       = "2014",
+               legend      = "Sum of violation",
+               num_colors = 9)
+g3 <- zip_choropleth(choropleth_2015,
+               county_zoom = nyc_fips,
+               title       = "2015",
+               legend      = "Sum of violation",
+               num_colors = 9)
+g4 <- zip_choropleth(choropleth_2016,
+               county_zoom = nyc_fips,
+               title       = "2016",
+               legend      = "Sum of violation",
+               num_colors = 9)
+g5 <- zip_choropleth(choropleth_2017,
+               county_zoom = nyc_fips,
+               title       = "2017",
+               legend      = "Sum of violation",
+               num_colors = 9)
+g6 <- zip_choropleth(choropleth_2018,
+               county_zoom = nyc_fips,
+               title       = "2018",
+               legend      = "Sum of violation",
+               num_colors = 9)
+g7 <- zip_choropleth(choropleth_2019,
+               county_zoom = nyc_fips,
+               title       = "2019",
+               legend      = "Sum of violation",
+               num_colors = 9)
+
+grid.arrange(g1,g2,g3,g4,g5,g6,g7, nrow =2,top=textGrob('Violation records by year', gp=gpar(fontsize=30,font=8)))
+
+
+```
+
+As gentrification becomes a popular issue around the world, we wanted to find the trend of the violations from 2013 to 2019. Since the violation status closed means that the building has fixed the problem, so that the building is in good quality now, but most of the buildings that had an issue in 2013 have fixed the problem in 2019. Therefore, for this graph, we have used a dataframe that does not filter the violation status. We have thought some areas should have a change in the amount of violation due to gentrification, but the above graph shows the other way. We can conclude that there is not much gentrification from 2013 to 2019.
+
+
+```{r}
+#Min-Max normalization to later merge
+rescaling_neg <- function(x){(-x-min(-x))/(max(-x)-min(-x))*100} 
+
+sum_score_neighborhood$grade <- rescaling_neg(sum_score_neighborhood$Sum)
+
+```
+
+
+
+## 6. Interactive Parts:
+
+Check [here](https://hl3328.shinyapps.io/EDAV_final_project/) for the interactive graph. We built and hosted interactive graphing app using Shiny R. There are three tabs you can explore in the interactive chart. First, you can choose the year range for all three different dataset and neighborhoods to draw Time series line graph. In the Table tab, you will have access to numbers for the time series graph. Lastly, Neighborhood tab will show you where each neighborhoods are located within NYC. If the connection is lost with the server, please refresh the page. It might take some time to render some plots. 
+
+
+
+## 7. Conclusion
+
+```{r fig.height=10, fig.width=20}
+
+sum_score_neighborhood$gunshoot <- scores$scaled
+sum_score_neighborhood$res <- mean_score_neighbor$Mean
+sum_score_neighborhood$value <- sum_score_neighborhood$grade + sum_score_neighborhood$gunshoot + sum_score_neighborhood$res
+
+
+pcp_df <- sum_score_neighborhood[1]
+pcp_df$Safety <- sum_score_neighborhood$gunshoot
+pcp_df$RestaurantSanitary <- sum_score_neighborhood$res
+pcp_df$BuildingQuality <- sum_score_neighborhood$grade
+parcoords(pcp_df,rownames = FALSE, brushMode = "1D-axes",color = list(colorScale = 'scaleOrdinal', colorBy = 'neighborhood', colorScheme = 'schemeCategory10'), withD3 = TRUE, reorderable = TRUE)
+```
+
+```{r fig.height=5, fig.width=10}
+choropleth_data$value <- sum_score_neighborhood$value[match(choropleth_data$Neighborhood, sum_score_neighborhood$neighborhood)]
+choropleth_data$region <- as.character(choropleth_data$ZipCode)
+zip_choropleth(choropleth_data,
+               county_zoom = nyc_fips,
+               title       = "Overall goodness of neighborhood",
+               legend      = "Score",
+               num_colors = 7)
+```
+```{r}
+ordered_by_val <- sum_score_neighborhood[1]
+ordered_by_val$Score <- sum_score_neighborhood$value
+ordered_by_val <- ordered_by_val[order(ordered_by_val$Score, decreasing = TRUE),]
+ordered_by_val
+```
+
+After the analysis of NYPD complaint, NYC restaurant sanitary grade, and building violation data, we have scaled each score from 0 to 100 where 0 is the worst quality or most dangerous, and 100 is the neighborhood with the safest environment and decent quality of building and restaurant. From the choropleth map above, we can easily identify that central Brooklyn is the worst place to live whereas the lower manhattan and upper east side are the greatest places to live. We can identify that the midtown and downtown area have similar quality and safety overall by the legend of the choropleth map. Moreover, the upper side of the Bronx, Staten Island, and central queens area have a higher score than most of the Manhattan area. We have used counts as our metric for the score. Therefore, a smaller population of such areas compared to one of the Manhattan area will affect the number of shooting incidents in the area. The same logic can be applied to the quality of the building. Since the scores are calculated by the counts of violations with multiple seriousness, less populated areas will have less building so better scores. Even though we have standardized the scale of data in restaurants' inspection grade, the PCP graph shows that most of the neighborhoods' grades are in the range of 85 to 90. Therefore, the effect of restaurant inspection is a bit insignificant in the analysis. We can conclude that restaurants have similar quality in sanitary. Excluding some of the suburban areas such as Northeast Queens or Mid-Island, the great neighborhoods to live in are Lower Manhattan, Greenwich Village and Soho, and Upper East Side, which are the prestigious areas for a long time. Before the start of the analysis, we predicted such areas to have high scores, and the analysis demonstrates our prediction to be precise. 
+
+Our goal for the project is to score the general quality of the neighborhood by scoring each neighborhood by various factors. However, due to a limitation on time and data, we only used three datasets that measure safety around the area, quality of buildings, and sanitary grades of the restaurants. If we wanted to rigorously score the wellness of area, we need to include factors such as transportation, quality of education for kids, and entertainment in the neighborhood. Moreover, the safety of the area is not only represented by the gunshot incidents of the area but also by records on misdemeanor and felony. The sanitary grade of the restaurants represents the cleanliness of the food but not the quality of the food. Therefore, we felt the limitation of a lack of data. In future studies, we will try to incorporate more factors to score the area in a better way.  
+
+## 8. Link to Data Set Source
+[Restaurant Inspection Data](https://data.cityofnewyork.us/Health/DOHMH-New-York-City-Restaurant-Inspection-Results/43nn-pn8j)
+
+[Restaurant Inspection Dataset Description](https://data.cityofnewyork.us/api/views/43nn-pn8j/files/3016a624-55c0-4bd0-bfb4-95c6b9ea6ba4?download=true&filename=About_NYC_Restaurant_Inspection_Data_on_NYC_OpenData_092418.docx)
+
+[Shooting Data](https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8)
+
+[Shooting Dataset Description](https://data.cityofnewyork.us/api/views/833y-fsy8/files/e4e3d86c-348f-4a16-a17f-19480c089429?download=true&filename=NYPD_Shootings_Incident_Level_Data_Footnotes.pdf)
+
+[Building Inspection Data](https://data.cityofnewyork.us/Housing-Development/Housing-Maintenance-Code-Violations/wvxf-dwi5)
+
+[Building Inspection Dataset Description](https://data.cityofnewyork.us/api/views/wvxf-dwi5/files/02c794c8-3013-49ea-9ab3-9e5998b061de?download=true&filename=HPD%20Violation%20Open%20Data%202017.pdf)
+
+
